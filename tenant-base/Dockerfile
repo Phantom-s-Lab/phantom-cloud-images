@@ -1,5 +1,7 @@
 FROM alpine:3.24.4
 
+SHELL ["/bin/ash", "-eo", "pipefail", "-c"]
+
 RUN apk add --no-cache openssh-server \
     && adduser -D -u 1000 -s /bin/sh tenant \
     && echo 'tenant:*' | chpasswd -e \
