@@ -27,3 +27,22 @@ docker run --rm --entrypoint sh "$image" -c '
         echo "ok: $want"
     done
 '
+
+keydir="$(mktemp -d)"
+fingerprint() {
+    docker run --rm -v "$keydir:/etc/ssh/hostkeys" --entrypoint sh "$image" \
+        -c 'ssh-keygen -lf /etc/ssh/hostkeys/ssh_host_ed25519_key.pub'
+}
+
+cid="$(docker run -d -v "$keydir:/etc/ssh/hostkeys" "$image")"
+sleep 3
+docker rm -f "$cid" >/dev/null
+first="$(fingerprint)"
+
+cid="$(docker run -d -v "$keydir:/etc/ssh/hostkeys" "$image")"
+sleep 3
+docker rm -f "$cid" >/dev/null
+second="$(fingerprint)"
+
+[ -n "$first" ] && [ "$first" = "$second" ] || { echo "FAIL: host key not persisted"; exit 1; }
+echo "ok: host key persisted across restarts"
