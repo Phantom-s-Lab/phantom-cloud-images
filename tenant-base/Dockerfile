@@ -1,5 +1,8 @@
 FROM alpine:3.24.4
 
+LABEL org.opencontainers.image.title="tenant-base" \
+      org.opencontainers.image.description="Phantom-cloud tenant SSH base image (public key auth only)"
+
 SHELL ["/bin/ash", "-eo", "pipefail", "-c"]
 
 RUN apk add --no-cache openssh-server \
