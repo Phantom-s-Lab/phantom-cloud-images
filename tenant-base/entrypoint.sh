@@ -16,7 +16,9 @@ if ls "$keydir"/ssh_host_*_key >/dev/null 2>&1; then
 fi
 ssh-keygen -A >/dev/null
 
-chown tenant:tenant /home/tenant
-chmod 700 /home/tenant
+if [ "$(stat -c %U /home/tenant)" != tenant ]; then
+    chmod 700 /home/tenant
+    chown tenant:tenant /home/tenant
+fi
 
 exec /usr/sbin/sshd -D -e

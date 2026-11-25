@@ -28,21 +28,39 @@ docker run --rm --entrypoint sh "$image" -c '
     done
 '
 
+
+caps="--cap-drop ALL --cap-add CHOWN --cap-add SETUID --cap-add SETGID --cap-add SYS_CHROOT --cap-add AUDIT_WRITE --cap-add KILL --security-opt no-new-privileges"
 keydir="$(mktemp -d)"
+homedir="$(mktemp -d)"
+
+run_entrypoint() {
+    # shellcheck disable=SC2086
+    cid="$(docker run -d $caps -v "$keydir:/etc/ssh/hostkeys" -v "$homedir:/home/tenant" "$image")"
+    sleep 3
+    if [ "$(docker inspect -f '{{.State.Running}}' "$cid")" != true ]; then
+        docker logs "$cid"
+        docker rm -f "$cid" >/dev/null
+        echo "FAIL: container exited (pod-equivalent capabilities)"; exit 1
+    fi
+    docker rm -f "$cid" >/dev/null
+}
+
 fingerprint() {
     docker run --rm -v "$keydir:/etc/ssh/hostkeys" --entrypoint sh "$image" \
         -c 'ssh-keygen -lf /etc/ssh/hostkeys/ssh_host_ed25519_key.pub'
 }
 
-cid="$(docker run -d -v "$keydir:/etc/ssh/hostkeys" "$image")"
-sleep 3
-docker rm -f "$cid" >/dev/null
+run_entrypoint
 first="$(fingerprint)"
+echo "ok: starts with pod-equivalent capabilities"
 
-cid="$(docker run -d -v "$keydir:/etc/ssh/hostkeys" "$image")"
-sleep 3
-docker rm -f "$cid" >/dev/null
+run_entrypoint
 second="$(fingerprint)"
+echo "ok: restarts with existing volumes"
 
 [ -n "$first" ] && [ "$first" = "$second" ] || { echo "FAIL: host key not persisted"; exit 1; }
 echo "ok: host key persisted across restarts"
+
+owner="$(docker run --rm -v "$homedir:/home/tenant" --entrypoint stat "$image" -c %U /home/tenant)"
+[ "$owner" = tenant ] || { echo "FAIL: home owner is $owner"; exit 1; }
+echo "ok: home owned by tenant"
