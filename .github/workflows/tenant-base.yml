@@ -1,0 +1,145 @@
+name: tenant-base
+
+on:
+  pull_request:
+    paths:
+      - "tenant-base/**"
+      - ".hadolint.yaml"
+      - ".github/workflows/tenant-base.yml"
+  push:
+    branches: [main]
+    paths:
+      - "tenant-base/**"
+      - ".hadolint.yaml"
+      - ".github/workflows/tenant-base.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tenant-base-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  IMAGE: ghcr.io/phantom-s-lab/tenant-base
+  CONTEXT: tenant-base
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Lint Dockerfile
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: ${{ env.CONTEXT }}/Dockerfile
+          config: .hadolint.yaml
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build (local, amd64)
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ env.CONTEXT }}
+          load: true
+          tags: tenant-base:test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test
+        run: ./${{ env.CONTEXT }}/test.sh tenant-base:test
+
+      - name: Vulnerability scan
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
+        with:
+          image-ref: tenant-base:test
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+
+  publish:
+    needs: verify
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: tag
+        run: echo "tag=sha-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push (arm64, amd64)
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ env.CONTEXT }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ env.IMAGE }}:${{ steps.tag.outputs.tag }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy-pr:
+    needs: publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: Phantom-s-Lab/phantom-cloud-gitops
+          token: ${{ secrets.GITOPS_PR_TOKEN }}
+          path: gitops
+
+      - name: Update image tag
+        id: update
+        working-directory: gitops
+        run: |
+          file=platform/pipeline-sample/deployment.yaml
+          if [ ! -f "$file" ]; then
+            echo "::notice::$file 이 아직 없어 배포 PR을 건너뜀"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          sed -i "s#image: ${IMAGE}:.*#image: ${IMAGE}:${{ needs.publish.outputs.tag }}#" "$file"
+          if git diff --quiet "$file"; then
+            echo "::error::이미지 태그가 바뀌지 않음"
+            exit 1
+          fi
+
+      - if: steps.update.outputs.skip != 'true'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          path: gitops
+          token: ${{ secrets.GITOPS_PR_TOKEN }}
+          branch: deploy/tenant-base-${{ needs.publish.outputs.tag }}
+          commit-message: "deploy: tenant-base ${{ needs.publish.outputs.tag }}"
+          title: "deploy: tenant-base ${{ needs.publish.outputs.tag }}"
+          body: |
+            ## 변경 내용
+            - `platform/pipeline-sample` 이미지를 `${{ env.IMAGE }}:${{ needs.publish.outputs.tag }}`로 변경
+
+            ## 출처
+            - 소스 커밋: ${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}
+            - 빌드: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            - 검증: hadolint, 스모크 테스트, Trivy(CRITICAL) 통과
+
+            병합하면 ArgoCD가 배포합니다.
+          delete-branch: true
