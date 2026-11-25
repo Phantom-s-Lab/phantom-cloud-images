@@ -32,6 +32,8 @@ docker run --rm --entrypoint sh "$image" -c '
 caps="--cap-drop ALL --cap-add CHOWN --cap-add SETUID --cap-add SETGID --cap-add SYS_CHROOT --cap-add AUDIT_WRITE --cap-add KILL --security-opt no-new-privileges"
 keydir="$(mktemp -d)"
 homedir="$(mktemp -d)"
+sudo chown root:root "$keydir" "$homedir"
+sudo chmod 755 "$keydir" "$homedir"
 
 run_entrypoint() {
     # shellcheck disable=SC2086
