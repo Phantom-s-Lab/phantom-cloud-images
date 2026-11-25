@@ -14,7 +14,7 @@ Phantom-cloud에서 직접 빌드하는 컨테이너 이미지의 소스와 CI�
 ```
 PR    : hadolint → 빌드 → 스모크 테스트 → Trivy (CRITICAL 시 실패), 푸시 안 함
 main  : 위 검증 → arm64/amd64 빌드 → GHCR 푸시 (태그 sha-<커밋 7자리>)
-        → phantom-cloud-gitops에 이미지 태그 변경 PR 자동 생성
+        → phantom-cloud-gitops의 tenant 차트 이미지 태그 변경 PR 자동 생성
         → PR 병합 시 ArgoCD가 배포
 ```
 

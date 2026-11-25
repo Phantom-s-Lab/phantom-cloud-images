@@ -112,13 +112,13 @@ jobs:
         id: update
         working-directory: gitops
         run: |
-          file=platform/pipeline-sample/deployment.yaml
+          file=charts/tenant/values.yaml
           if [ ! -f "$file" ]; then
             echo "::notice::$file 이 아직 없어 배포 PR을 건너뜀"
             echo "skip=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          sed -i "s#image: ${IMAGE}:.*#image: ${IMAGE}:${{ needs.publish.outputs.tag }}#" "$file"
+          sed -i "s#^  tag: sha-.*#  tag: ${{ needs.publish.outputs.tag }}#" "$file"
           if git diff --quiet "$file"; then
             echo "::error::이미지 태그가 바뀌지 않음"
             exit 1
@@ -134,7 +134,7 @@ jobs:
           title: "deploy: tenant-base ${{ needs.publish.outputs.tag }}"
           body: |
             ## 변경 내용
-            - `platform/pipeline-sample` 이미지를 `${{ env.IMAGE }}:${{ needs.publish.outputs.tag }}`로 변경
+            - tenant 차트 이미지 태그를 `${{ needs.publish.outputs.tag }}`로 변경 (모든 테넌트에 반영)
 
             ## 출처
             - 소스 커밋: ${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}
