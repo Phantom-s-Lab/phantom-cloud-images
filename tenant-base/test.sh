@@ -35,17 +35,31 @@ homedir="$(mktemp -d)"
 sudo chown root:root "$keydir" "$homedir"
 sudo chmod 755 "$keydir" "$homedir"
 
+sshdir="$(mktemp -d)"
+ssh-keygen -q -t ed25519 -N '' -f "$sshdir/id"
+srcdir="$(mktemp -d)"
+cp "$sshdir/id.pub" "$srcdir/tenant"
+sudo chown -R root:root "$srcdir"
+sudo chmod 777 "$srcdir"
+
 run_entrypoint() {
     # shellcheck disable=SC2086
-    cid="$(docker run -d $caps -v "$keydir:/etc/ssh/hostkeys" -v "$homedir:/home/tenant" "$image")"
+    cid="$(docker run -d $caps -p 127.0.0.1:2222:2222 \
+        -v "$keydir:/etc/ssh/hostkeys" -v "$homedir:/home/tenant" \
+        -v "$srcdir:/etc/ssh/authorized_keys.src:ro" "$image")"
     sleep 3
     if [ "$(docker inspect -f '{{.State.Running}}' "$cid")" != true ]; then
         docker logs "$cid"
         docker rm -f "$cid" >/dev/null
         echo "FAIL: container exited (pod-equivalent capabilities)"; exit 1
     fi
+}
+
+stop_entrypoint() {
     docker rm -f "$cid" >/dev/null
 }
+
+ssh_opts="-p 2222 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes -o ConnectTimeout=5"
 
 fingerprint() {
     docker run --rm -v "$keydir:/etc/ssh/hostkeys" --entrypoint sh "$image" \
@@ -53,16 +67,31 @@ fingerprint() {
 }
 
 run_entrypoint
-first="$(fingerprint)"
 echo "ok: starts with pod-equivalent capabilities"
 
+# shellcheck disable=SC2086
+user="$(ssh $ssh_opts -i "$sshdir/id" tenant@127.0.0.1 'id -un')"
+[ "$user" = tenant ] || { docker logs "$cid"; echo "FAIL: public key login"; exit 1; }
+echo "ok: public key login (keys mounted from 0777 dir)"
+
+# shellcheck disable=SC2086
+if ssh $ssh_opts -o PubkeyAuthentication=no -o PasswordAuthentication=yes tenant@127.0.0.1 true 2>/dev/null; then
+    echo "FAIL: login without public key"; exit 1
+fi
+echo "ok: login without public key rejected"
+stop_entrypoint
+first="$(fingerprint)"
+
+sudo chown 1000:1000 "$homedir"
+sudo chmod 777 "$homedir"
 run_entrypoint
+stop_entrypoint
 second="$(fingerprint)"
 echo "ok: restarts with existing volumes"
 
 [ -n "$first" ] && [ "$first" = "$second" ] || { echo "FAIL: host key not persisted"; exit 1; }
 echo "ok: host key persisted across restarts"
 
-owner="$(docker run --rm -v "$homedir:/home/tenant" --entrypoint stat "$image" -c %U /home/tenant)"
-[ "$owner" = tenant ] || { echo "FAIL: home owner is $owner"; exit 1; }
-echo "ok: home owned by tenant"
+mode="$(docker run --rm -v "$homedir:/home/tenant" --entrypoint stat "$image" -c '%U %a' /home/tenant)"
+[ "$mode" = "tenant 700" ] || { echo "FAIL: home is $mode"; exit 1; }
+echo "ok: home owned by tenant with 700 (fixed from tenant 777)"
